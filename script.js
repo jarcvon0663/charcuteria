@@ -19,7 +19,8 @@ const CATS = {
 const iso = t => new Date(t).toISOString().slice(0, 10);
 const dmy = s => s.split('-').reverse().join('/');
 const fmt = n => Math.round(n).toLocaleString('es-CO');
-const hh = m => (m / 60).toFixed(2);
+const esc = t => String(t).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const hh = m => (m / 60).toFixed(2).replace('.', ',');
 
 function festivos(y) { // Colombia: fijos, ley Emiliani y Semana Santa
     const a = y % 19, b = Math.floor(y / 100), c = y % 100, d = Math.floor(b / 4), e = b % 4,
@@ -119,60 +120,96 @@ function calcular(emp, cfg) {
 // ===== Interfaz =====
 let datos = null;
 const $ = id => id[0] === '[' ? document.querySelector(id) : document.getElementById(id);
+const iniciales = n => n.split(/\s+/).filter(Boolean).slice(0, 2).map(p => p[0]).join('').toUpperCase();
+const guardado = k => { try { return localStorage.getItem(k); } catch (e) { return null; } };
+const guardar = (k, v) => { try { localStorage.setItem(k, v); } catch (e) { /* sin almacenamiento */ } };
+
+function estado(msg, tipo) { const e = $('estado'); e.textContent = msg; e.className = 'estado' + (tipo ? ' ' + tipo : ''); }
 
 function cargar(file) {
+    if (!/\.xlsx?$/i.test(file.name)) return estado('Elige un archivo de Excel (.xlsx o .xls).', 'error');
+    estado('Leyendo el archivo…');
     const rd = new FileReader();
     rd.onload = ev => {
         try {
             const wb = XLSX.read(new Uint8Array(ev.target.result), { type: 'array' });
             const R = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: true, defval: null });
-            datos = parsear(R);
-            if (!datos.emps.length) throw new Error('No encontré empleados. Verifica que el formato sea el mismo del archivo de horas.');
-            iniciar();
-        } catch (err) { $('estado').textContent = '⚠️ ' + err.message; }
+            const d = parsear(R);
+            if (!d.emps.length) throw new Error('No encontré empleados. Verifica que el formato sea el mismo del archivo de horas.');
+            if (!d.ini) throw new Error('No encontré fechas de trabajo en el archivo.');
+            datos = d;
+            iniciar(file.name);
+        } catch (err) { estado(err.message, 'error'); }
     };
+    rd.onerror = () => estado('No pude leer el archivo. Intenta de nuevo.', 'error');
     rd.readAsArrayBuffer(file);
 }
 
-function iniciar() {
-    $('restaurante').textContent = (datos.restaurante || 'Restaurante') + (datos.ini ? ` · ${dmy(datos.ini)} a ${dmy(datos.fin)}` : '');
-    $('estado').textContent = `✅ ${datos.emps.length} empleados leídos.`;
+// "LA CHARCUTERIE" -> "La Charcuterie" cuando el nombre viene todo en mayúsculas
+const nombreLegible = n => n === n.toUpperCase() ? n.toLowerCase().replace(/(^|\s)\p{L}/gu, m => m.toUpperCase()) : n;
+
+function iniciar(archivo) {
+    document.body.classList.add('cargado');
+    $('restaurante').innerHTML = `<b>${esc(nombreLegible(datos.restaurante || 'Restaurante'))}</b><span>${dmy(datos.ini)} al ${dmy(datos.fin)}</span>`;
+    $('dropTitulo').textContent = archivo;
+    $('dropSub').textContent = `${datos.emps.length} empleados leídos`;
+    $('dropBoton').textContent = 'Cambiar archivo';
+    estado('');
     $('almuerzo').value = datos.almuerzo;
     const fest = [...festivos(+datos.ini.slice(0, 4))].filter(f => f >= datos.ini && f <= datos.fin).sort();
     $('festivos').value = fest.map(dmy).join('\n');
     const av = datos.avisos.slice();
     if (datos.ini < '2026-08-01') av.push('El período es anterior a agosto de 2026: esta calculadora usa jornada de 42 h y dominical 90 %, que pueden no aplicar.');
-    $('avisos').innerHTML = av.map(t => `<div class="aviso">⚠️ ${t}</div>`).join('');
-    $('tablaEmpleados').innerHTML = '<tr><th>Empleado</th><th>Salario mensual (COP)</th><th>Dom/fest compensados con descanso</th></tr>' +
-        datos.emps.map((e, i) => `<tr><td>${e.nombre}</td>
-            <td><input type="text" inputmode="numeric" data-sal="${i}" value="${fmt(+localStorage.getItem('sal:' + e.nombre) || SMMLV)}"></td>
-            <td><input type="checkbox" data-comp="${i}" ${e.descansos ? 'checked' : ''}>
-            ${e.descansos ? '' : '<span class="info">sin descansos en el período</span>'}</td></tr>`).join('');
+    $('avisos').innerHTML = av.map(t => `<div class="aviso"><b>Revisa:</b>${esc(t)}</div>`).join('');
+    $('tablaEmpleados').innerHTML = datos.emps.map((e, i) => `<div class="emp-fila">
+        <span class="emp-nombre">${esc(e.nombre)}</span>
+        <label class="campo"><span>Salario mensual (COP)</span>
+            <input type="text" inputmode="numeric" data-sal="${i}" value="${fmt(+guardado('sal:' + e.nombre) || SMMLV)}"></label>
+        <label class="check"><input type="checkbox" data-comp="${i}" ${e.descansos ? 'checked' : ''}>
+            <span>Dom/fest compensados con descanso${e.descansos ? '' : ' (no tuvo descansos en el período)'}</span></label>
+    </div>`).join('');
     $('config').hidden = $('resultados').hidden = false;
     render();
 }
 
 function render() {
     const fest = new Set(($('festivos').value.match(/\d{1,2}\/\d{1,2}\/\d{4}/g) || []).map(fecha));
-    let total = 0, html = '';
-    datos.emps.forEach((e, i) => {
-        const sal = +($(`[data-sal="${i}"]`) || {}).value?.replace(/\D/g, '') || SMMLV;
-        localStorage.setItem('sal:' + e.nombre, sal);
+    const res = datos.emps.map((e, i) => {
+        const sal = +String($(`[data-sal="${i}"]`).value).replace(/\D/g, '') || SMMLV;
+        guardar('sal:' + e.nombre, sal);
         const cfg = { almuerzo: +$('almuerzo').value || 0, diario: +$('diario').value || 8, semanal: +$('semanal').value || 42,
             festivos: fest, ini: datos.ini, fin: datos.fin, comp: $(`[data-comp="${i}"]`).checked, valorHora: sal / DIVISOR };
-        const r = calcular(e, cfg); total += r.total;
-        html += `<details class="emp"><summary><span><b>${e.nombre}</b><small>${hh(r.horas)} h trabajadas · ${hh(r.extra)} h extra · ${e.descansos} descansos · ${e.ausencias} ausencias</small></span>
-            <b>COP ${fmt(r.total)}</b></summary>
-            <table><tr><th>Concepto</th><th class="n">Horas</th><th class="n">Factor</th><th class="n">Valor</th></tr>` +
-            r.rows.map(x => `<tr><td>${x.nombre}</td><td class="n">${hh(x.min)}</td><td class="n">${x.factor ? x.factor.toFixed(2) : '-'}</td><td class="n">${fmt(x.valor)}</td></tr>`).join('') +
-            `</table></details>`;
+        return { e, r: calcular(e, cfg) };
     });
-    $('total').innerHTML = `<div class="total">Total: COP ${fmt(total)}</div>`;
-    $('detalle').innerHTML = html;
+    const total = res.reduce((s, x) => s + x.r.total, 0);
+    const horas = res.reduce((s, x) => s + x.r.horas, 0), extra = res.reduce((s, x) => s + x.r.extra, 0);
+    const mayor = Math.max(...res.map(x => x.r.total), 1);
+    $('total').innerHTML = `<div class="resumen">
+        <span class="etq">Total a pagar, adicional al salario mensual</span>
+        <strong>COP ${fmt(total)}</strong>
+        <dl class="stats">
+            <div><dt>Empleados</dt><dd>${res.length}</dd></div>
+            <div><dt>Horas trabajadas</dt><dd>${hh(horas)}</dd></div>
+            <div><dt>Horas extra</dt><dd>${hh(extra)}</dd></div>
+        </dl></div>`;
+    $('detalle').innerHTML = res.map(({ e, r }) => `<details class="emp"><summary>
+        <span class="avatar" aria-hidden="true">${esc(iniciales(e.nombre))}</span>
+        <span class="emp-info"><b>${esc(e.nombre)}</b>
+            <small>${hh(r.horas)} h trabajadas, ${hh(r.extra)} h extra, ${e.descansos} descansos, ${e.ausencias} ausencias</small>
+            <span class="barra"><i style="width:${Math.round(r.total / mayor * 100)}%"></i></span></span>
+        <span class="emp-valor">COP ${fmt(r.total)}</span><span class="chev" aria-hidden="true"></span></summary>
+        <div class="tabla-wrap"><table><tr><th>Concepto</th><th class="n">Horas</th><th class="n">Factor</th><th class="n">Valor</th></tr>` +
+        r.rows.map(x => `<tr><td>${x.nombre}</td><td class="n">${hh(x.min)}</td><td class="n">${x.factor ? x.factor.toFixed(2) : '-'}</td><td class="n">${fmt(x.valor)}</td></tr>`).join('') +
+        `</table></div></details>`).join('');
 }
 
 if (typeof document !== 'undefined') {
-    $('archivo').addEventListener('change', e => e.target.files[0] && cargar(e.target.files[0]));
+    const drop = $('drop');
+    $('archivo').addEventListener('change', e => { const f = e.target.files[0]; if (f) cargar(f); e.target.value = ''; });
+    ['dragenter', 'dragover'].forEach(t => drop.addEventListener(t, e => { e.preventDefault(); drop.classList.add('arrastrando'); }));
+    ['dragleave', 'drop'].forEach(t => drop.addEventListener(t, e => { e.preventDefault(); drop.classList.remove('arrastrando'); }));
+    drop.addEventListener('drop', e => { const f = e.dataTransfer.files[0]; if (f) cargar(f); });
+    ['dragover', 'drop'].forEach(t => window.addEventListener(t, e => e.preventDefault())); // evita que el navegador abra el archivo
     ['almuerzo', 'diario', 'semanal', 'festivos'].forEach(id => $(id).addEventListener('input', () => datos && render()));
     $('tablaEmpleados').addEventListener('input', e => {
         if (e.target.dataset.sal !== undefined) e.target.value = fmt(+e.target.value.replace(/\D/g, '') || 0);

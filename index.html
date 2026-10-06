@@ -3,54 +3,88 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Calculadora de Horas Extras y Recargos</title>
+    <title>Horas extras y recargos</title>
     <link rel="stylesheet" href="estilo.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 </head>
 <body>
-<main>
-    <header>
-        <h1>Calculadora de Horas Extras y Recargos</h1>
-        <p id="restaurante" class="info">Carga el Excel de horas laboradas para calcular cuánto se paga a cada empleado.</p>
-    </header>
-
-    <section class="card">
-        <h2>1. Excel de horas</h2>
-        <input type="file" id="archivo" accept=".xlsx,.xls">
-        <p id="estado" class="info"></p>
-        <div id="avisos"></div>
-    </section>
-
-    <section class="card" id="config" hidden>
-        <h2>2. Parámetros</h2>
-        <div class="fila">
-            <label>Almuerzo (min/día) <input type="number" id="almuerzo" min="0"></label>
-            <label>Jornada diaria (h) <input type="number" id="diario" value="8" min="1" step="0.5"></label>
-            <label>Jornada semanal (h) <input type="number" id="semanal" value="42" min="1" step="0.5"></label>
+<header class="hero">
+    <div class="topbar">
+        <div class="marca">
+            <svg width="30" height="30" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="9" fill="#7CC4B4"/><circle cx="16" cy="16" r="8" fill="none" stroke="#0E3B35" stroke-width="2.2"/><path d="M16 11.5V16l3.2 2" fill="none" stroke="#0E3B35" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <span>Horas extras</span>
         </div>
-        <label>Festivos del período (dd/mm/aaaa, uno por línea)
-            <textarea id="festivos" rows="2"></textarea>
-        </label>
-        <h2>3. Salarios</h2>
-        <table id="tablaEmpleados"></table>
-        <p class="info">Valor hora = salario ÷ 210 (jornada de 42 h). Si el empleado no tiene salario definido se usa el salario mínimo 2026.</p>
-    </section>
+        <div id="restaurante" class="contexto"></div>
+    </div>
 
-    <section class="card" id="resultados" hidden>
-        <h2>Resultado: horas extras y recargos a pagar</h2>
-        <div id="total"></div>
-        <div id="detalle"></div>
-        <details class="info">
-            <summary>Cómo se calcula</summary>
-            <ul>
-                <li>Los valores son <b>adicionales al salario mensual</b>.</li>
-                <li>Nocturno: de 7:00 p.m. a 6:00 a.m. (+35 %). Dominical/festivo: +90 %.</li>
-                <li>Extra = horas por encima de la jornada diaria y, en semanas completas (lun–dom), de la semanal. Extra diurna +25 %, nocturna +75 %.</li>
-                <li>El almuerzo se descuenta una vez por día, del primer turno y hacia la mitad del mismo.</li>
-                <li>Dom/fest "compensado" (el empleado tuvo un día de descanso): solo se paga el recargo. Si no, se paga la hora completa más el recargo.</li>
-            </ul>
-        </details>
-    </section>
+    <div class="hero-in">
+        <div class="hero-texto">
+            <h1>Calcula las horas extras de tu equipo desde el Excel</h1>
+            <p>Sube el archivo de horas de la quincena y ve cuánto debes pagar a cada empleado en horas extras y recargos, con las reglas laborales de Colombia vigentes en 2026.</p>
+            <ol class="pasos">
+                <li>Sube el Excel de horas</li>
+                <li>Escribe el salario de cada empleado</li>
+                <li>Revisa cuánto pagar</li>
+            </ol>
+        </div>
+
+        <div class="hero-carga">
+            <label class="drop" id="drop" for="archivo">
+                <span class="drop-icono">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 16V4"/><path d="M7 9l5-5 5 5"/><path d="M4 16v3a1 1 0 001 1h14a1 1 0 001-1v-3"/></svg>
+                </span>
+                <span class="drop-cuerpo">
+                    <span class="drop-titulo" id="dropTitulo">Arrastra aquí el Excel de horas</span>
+                    <span class="drop-sub" id="dropSub">o elígelo desde tu computador. Acepta .xlsx y .xls.</span>
+                </span>
+                <span class="drop-boton" id="dropBoton">Elegir archivo</span>
+            </label>
+            <input type="file" id="archivo" class="sr-only" accept=".xlsx,.xls">
+            <p id="estado" class="estado" role="status"></p>
+            <p class="privacidad">El archivo se procesa en este navegador y no se sube a ningún servidor.</p>
+        </div>
+    </div>
+</header>
+
+<main>
+    <div id="avisos"></div>
+
+    <div class="app">
+        <section id="config" class="panel" hidden>
+            <h2>Salarios</h2>
+            <p class="ayuda">Escribe el salario mensual de cada empleado. La app lo recuerda para la próxima quincena.</p>
+            <div id="tablaEmpleados" class="lista-salarios"></div>
+
+            <details class="ajustes">
+                <summary>Ajustes del cálculo</summary>
+                <div class="fila">
+                    <label>Almuerzo (min por día) <input type="number" id="almuerzo" min="0"></label>
+                    <label>Jornada diaria (h) <input type="number" id="diario" value="8" min="1" step="0.5"></label>
+                    <label>Jornada semanal (h) <input type="number" id="semanal" value="42" min="1" step="0.5"></label>
+                </div>
+                <label>Festivos del período (dd/mm/aaaa, uno por línea)
+                    <textarea id="festivos" rows="2"></textarea>
+                </label>
+                <p class="ayuda">Valor hora = salario ÷ 210 (jornada de 42 h). Si un empleado no tiene salario definido se usa el salario mínimo 2026.</p>
+            </details>
+        </section>
+
+        <section id="resultados" class="panel panel-resultado" hidden>
+            <h2>Pago de horas extras y recargos</h2>
+            <div id="total"></div>
+            <div id="detalle"></div>
+            <details class="como">
+                <summary>Cómo se calcula</summary>
+                <ul>
+                    <li>Los valores son <b>adicionales al salario mensual</b>.</li>
+                    <li>Nocturno: de 7:00 p.m. a 6:00 a.m. (+35 %). Dominical y festivo: +90 %.</li>
+                    <li>Extra: horas por encima de la jornada diaria y, en semanas completas (lunes a domingo), de la semanal. Extra diurna +25 %, nocturna +75 %.</li>
+                    <li>El almuerzo se descuenta una vez por día, del primer turno y hacia la mitad del mismo.</li>
+                    <li>Dom/fest compensado (el empleado tuvo un día de descanso): solo se paga el recargo. Si no, se paga la hora completa más el recargo.</li>
+                </ul>
+            </details>
+        </section>
+    </div>
 </main>
 <script src="script.js"></script>
 </body>
