@@ -172,17 +172,21 @@ function iniciar(archivo) {
     render();
 }
 
+let ultimo = null;
+
 function render() {
     const fest = new Set(($('festivos').value.match(/\d{1,2}\/\d{1,2}\/\d{4}/g) || []).map(fecha));
+    const base = { almuerzo: +$('almuerzo').value || 0, diario: +$('diario').value || 8, semanal: +$('semanal').value || 42 };
     const res = datos.emps.map((e, i) => {
         const sal = +String($(`[data-sal="${i}"]`).value).replace(/\D/g, '') || SMMLV;
         guardar('sal:' + e.nombre, sal);
-        const cfg = { almuerzo: +$('almuerzo').value || 0, diario: +$('diario').value || 8, semanal: +$('semanal').value || 42,
-            festivos: fest, ini: datos.ini, fin: datos.fin, comp: $(`[data-comp="${i}"]`).checked, valorHora: sal / DIVISOR };
-        return { e, r: calcular(e, cfg) };
+        const comp = $(`[data-comp="${i}"]`).checked;
+        const cfg = { ...base, festivos: fest, ini: datos.ini, fin: datos.fin, comp, valorHora: sal / DIVISOR };
+        return { e, r: calcular(e, cfg), sal, comp };
     });
     const total = res.reduce((s, x) => s + x.r.total, 0);
     const horas = res.reduce((s, x) => s + x.r.horas, 0), extra = res.reduce((s, x) => s + x.r.extra, 0);
+    ultimo = { res, total, horas, extra, base, festivos: [...fest].sort() };
     const mayor = Math.max(...res.map(x => x.r.total), 1);
     $('total').innerHTML = `<div class="resumen">
         <span class="etq">Total a pagar, adicional al salario mensual</span>
@@ -198,9 +202,232 @@ function render() {
             <small>${hh(r.horas)} h trabajadas, ${hh(r.extra)} h extra, ${e.descansos} descansos, ${e.ausencias} ausencias</small>
             <span class="barra"><i style="width:${Math.round(r.total / mayor * 100)}%"></i></span></span>
         <span class="emp-valor">COP ${fmt(r.total)}</span><span class="chev" aria-hidden="true"></span></summary>
-        <div class="tabla-wrap"><table><tr><th>Concepto</th><th class="n">Horas</th><th class="n">Factor</th><th class="n">Valor</th></tr>` +
-        r.rows.map(x => `<tr><td>${x.nombre}</td><td class="n">${hh(x.min)}</td><td class="n">${x.factor ? x.factor.toFixed(2) : '-'}</td><td class="n">${fmt(x.valor)}</td></tr>`).join('') +
+        <div class="tabla-wrap"><table><tr><th>Concepto</th><th class="n">Horas</th><th class="n col-factor">Factor</th><th class="n">Valor</th></tr>` +
+        r.rows.map(x => `<tr><td>${x.nombre}</td><td class="n">${hh(x.min)}</td><td class="n col-factor">${x.factor ? x.factor.toFixed(2) : '-'}</td><td class="n">${fmt(x.valor)}</td></tr>`).join('') +
         `</table></div></details>`).join('');
+}
+
+// ===== Reporte: Excel y PDF =====
+function armarReporte() {
+    const u = ultimo;
+    const nombre = nombreLegible(datos.restaurante || 'Restaurante');
+    const slug = nombre.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^A-Za-z0-9]+/g, '_').replace(/^_|_$/g, '');
+    return {
+        nombre, periodo: `${dmy(datos.ini)} al ${dmy(datos.fin)}`,
+        archivo: `Horas_extras_${slug}_${datos.ini}_a_${datos.fin}`,
+        total: u.total, horas: u.horas / 60, extra: u.extra / 60,
+        filas: u.res.map(({ e, r, sal, comp }) => ({
+            nombre: e.nombre, sal, valorHora: sal / DIVISOR, horas: r.horas / 60, extra: r.extra / 60,
+            total: r.total, comp, descansos: e.descansos, ausencias: e.ausencias,
+            conceptos: r.rows.filter(x => x.valor > 0).map(x => ({ concepto: x.nombre, horas: x.min / 60, factor: x.factor, valor: x.valor }))
+        })),
+        params: { ...u.base, festivos: u.festivos.map(dmy) }
+    };
+}
+
+function crearExcel(ExcelJS, rep) {
+    const VERDE = 'FF0E3B35', MENTA = 'FFDCEBE6';
+    const wb = new ExcelJS.Workbook();
+    wb.creator = 'Horas extras'; wb.created = new Date();
+    const encabezado = (fila, n) => {
+        fila.height = 24;
+        for (let c = 1; c <= n; c++) {
+            const x = fila.getCell(c);
+            x.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+            x.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: VERDE } };
+            x.alignment = { vertical: 'middle', horizontal: c === 1 ? 'left' : 'right', wrapText: true };
+        }
+    };
+    const totalFila = (fila, n) => {
+        for (let c = 1; c <= n; c++) {
+            const x = fila.getCell(c);
+            x.font = { bold: true, color: { argb: VERDE } };
+            x.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: MENTA } };
+        }
+    };
+
+    // --- Resumen ---
+    const ws = wb.addWorksheet('Resumen', { views: [{ state: 'frozen', ySplit: 4, showGridLines: false }] });
+    ws.columns = [{ width: 36 }, { width: 18 }, { width: 14 }, { width: 16 }, { width: 14 }, { width: 20 }, { width: 18 }];
+    ws.mergeCells('A1:G1'); ws.getCell('A1').value = `${rep.nombre}: horas extras y recargos`;
+    ws.getCell('A1').font = { bold: true, size: 16, color: { argb: VERDE } };
+    ws.mergeCells('A2:G2'); ws.getCell('A2').value = `Período del ${rep.periodo}. Valores adicionales al salario mensual (COP).`;
+    ws.getCell('A2').font = { color: { argb: 'FF566763' } };
+    const h = ws.getRow(4);
+    h.values = ['Empleado', 'Salario mensual', 'Valor hora', 'Horas trabajadas', 'Horas extra', 'Total a pagar', 'Dom/fest compensado'];
+    encabezado(h, 7);
+    rep.filas.forEach((f, i) => {
+        const r = ws.getRow(5 + i);
+        r.values = [f.nombre, f.sal, f.valorHora, f.horas, f.extra, f.total, f.comp ? 'Sí' : 'No'];
+        [2, 3, 6].forEach(c => { r.getCell(c).numFmt = '#,##0'; });
+        [4, 5].forEach(c => { r.getCell(c).numFmt = '0.00'; });
+        r.getCell(7).alignment = { horizontal: 'right' };
+        for (let c = 1; c <= 7; c++) r.getCell(c).border = { bottom: { style: 'thin', color: { argb: 'FFD3E2DD' } } };
+    });
+    const fin = 4 + rep.filas.length, t = ws.getRow(fin + 1);
+    t.getCell(1).value = 'Total';
+    t.getCell(4).value = { formula: `SUM(D5:D${fin})`, result: rep.horas };
+    t.getCell(5).value = { formula: `SUM(E5:E${fin})`, result: rep.extra };
+    t.getCell(6).value = { formula: `SUM(F5:F${fin})`, result: rep.total };
+    t.getCell(4).numFmt = t.getCell(5).numFmt = '0.00'; t.getCell(6).numFmt = '#,##0';
+    totalFila(t, 7);
+
+    // --- Detalle ---
+    const wd = wb.addWorksheet('Detalle', { views: [{ state: 'frozen', ySplit: 1 }] });
+    wd.columns = [{ width: 36 }, { width: 32 }, { width: 12 }, { width: 10 }, { width: 18 }];
+    const hd = wd.getRow(1); hd.values = ['Empleado', 'Concepto', 'Horas', 'Factor', 'Valor a pagar']; encabezado(hd, 5);
+    let n = 1;
+    rep.filas.forEach(f => {
+        const items = f.conceptos.length ? f.conceptos : [{ concepto: 'Sin horas extras ni recargos', horas: 0, factor: null, valor: 0 }];
+        items.forEach(c => {
+            const r = wd.getRow(++n);
+            r.values = [f.nombre, c.concepto, c.horas, c.factor, c.valor];
+            r.getCell(3).numFmt = '0.00'; r.getCell(4).numFmt = '0.00'; r.getCell(5).numFmt = '#,##0';
+        });
+    });
+    const td = wd.getRow(n + 1);
+    td.getCell(1).value = 'Total';
+    td.getCell(5).value = { formula: `SUM(E2:E${n})`, result: rep.total }; td.getCell(5).numFmt = '#,##0';
+    totalFila(td, 5);
+    wd.autoFilter = { from: 'A1', to: `E${n}` };
+
+    // --- Parámetros ---
+    const wp = wb.addWorksheet('Parámetros', { views: [{ showGridLines: false }] });
+    wp.columns = [{ width: 44 }, { width: 40 }];
+    const hp = wp.getRow(1); hp.values = ['Parámetro', 'Valor']; encabezado(hp, 2);
+    const p = rep.params;
+    [
+        ['Divisor mensual de horas (jornada de 42 h)', DIVISOR],
+        ['Recargo nocturno (7:00 p.m. a 6:00 a.m.)', REC_NOC],
+        ['Recargo dominical y festivo', REC_DOM],
+        ['Extra diurna', EXT_D],
+        ['Extra nocturna', EXT_N],
+        ['Jornada diaria (h)', p.diario],
+        ['Jornada semanal (h)', p.semanal],
+        ['Almuerzo descontado (min por día)', p.almuerzo],
+        ['Festivos del período', p.festivos.length ? p.festivos.join(', ') : 'Ninguno']
+    ].forEach(([k, v], i) => {
+        const r = wp.getRow(2 + i); r.values = [k, v];
+        if (typeof v === 'number' && v < 1) r.getCell(2).numFmt = '0%';
+        r.getCell(2).alignment = { horizontal: 'right', wrapText: true };
+    });
+    wp.getRow(12).getCell(1).value = 'Cálculo de referencia: valídalo con tu contador antes de pagar.';
+    wp.getRow(12).getCell(1).font = { italic: true, color: { argb: 'FF566763' } };
+    return wb;
+}
+
+function crearPDF(jsPDF, rep) {
+    const doc = new jsPDF({ unit: 'pt', format: 'a4' });
+    const W = doc.internal.pageSize.getWidth(), H = doc.internal.pageSize.getHeight(), M = 40;
+    const VERDE = [14, 59, 53], MENTA = [220, 235, 230], TENUE = [86, 103, 99];
+    const peso = v => '$ ' + fmt(v);
+
+    doc.setFillColor(...VERDE); doc.rect(0, 0, W, 92, 'F');
+    doc.setTextColor(255, 255, 255); doc.setFont('helvetica', 'bold'); doc.setFontSize(20);
+    doc.text('Horas extras y recargos', M, 42);
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(11);
+    doc.text(`${rep.nombre}   |   Período del ${rep.periodo}`, M, 64);
+
+    doc.setTextColor(...TENUE); doc.setFontSize(10);
+    doc.text('Total a pagar, adicional al salario mensual', M, 122);
+    doc.setTextColor(...VERDE); doc.setFont('helvetica', 'bold'); doc.setFontSize(26);
+    doc.text(peso(rep.total), M, 150);
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(10); doc.setTextColor(...TENUE);
+    doc.text(`${rep.filas.length} empleados   |   ${hh(rep.horas * 60)} horas trabajadas   |   ${hh(rep.extra * 60)} horas extra`, M, 170);
+
+    const estilos = {
+        styles: { font: 'helvetica', fontSize: 9.5, cellPadding: 5, textColor: [23, 33, 31] },
+        headStyles: { fillColor: VERDE, textColor: 255, fontStyle: 'bold' },
+        footStyles: { fillColor: MENTA, textColor: VERDE, fontStyle: 'bold' },
+        alternateRowStyles: { fillColor: [246, 250, 248] },
+        margin: { left: M, right: M, bottom: 50 }
+    };
+    doc.autoTable({
+        ...estilos, startY: 188,
+        head: [['Empleado', 'Salario mensual', 'Horas trabajadas', 'Horas extra', 'Total a pagar']],
+        body: rep.filas.map(f => [f.nombre, peso(f.sal), hh(f.horas * 60), hh(f.extra * 60), peso(f.total)]),
+        foot: [['Total', '', hh(rep.horas * 60), hh(rep.extra * 60), peso(rep.total)]],
+        columnStyles: { 1: { halign: 'right' }, 2: { halign: 'right' }, 3: { halign: 'right' }, 4: { halign: 'right' } },
+        didParseCell: d => { if (d.section === 'head' && d.column.index > 0) d.cell.styles.halign = 'right'; if (d.section === 'foot' && d.column.index > 0) d.cell.styles.halign = 'right'; }
+    });
+
+    let y = doc.lastAutoTable.finalY + 30;
+    if (y > H - 140) { doc.addPage(); y = 50; }
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(13); doc.setTextColor(...VERDE);
+    doc.text('Detalle por empleado', M, y);
+
+    const anchos = { 0: { cellWidth: 230 }, 1: { cellWidth: 80, halign: 'right' }, 2: { cellWidth: 80, halign: 'right' }, 3: { cellWidth: 120, halign: 'right' } };
+    let yy = y + 12;
+    rep.filas.forEach(f => {
+        const cuerpo = f.conceptos.length
+            ? f.conceptos.map(c => [c.concepto, hh(c.horas * 60), c.factor.toFixed(2), peso(c.valor)])
+            : [[{ content: 'Sin horas extras ni recargos en el período', colSpan: 4, styles: { fontStyle: 'italic', textColor: TENUE } }]];
+        doc.autoTable({
+            ...estilos, startY: yy, pageBreak: 'avoid', alternateRowStyles: { fillColor: [246, 250, 248] },
+            head: [
+                [{ content: f.nombre, colSpan: 3, styles: { fillColor: MENTA, textColor: VERDE, fontStyle: 'bold' } },
+                 { content: peso(f.total), styles: { fillColor: MENTA, textColor: VERDE, fontStyle: 'bold', halign: 'right' } }],
+                [{ content: 'Concepto', styles: { fillColor: 255, textColor: TENUE, fontStyle: 'normal', fontSize: 8 } },
+                 { content: 'Horas', styles: { fillColor: 255, textColor: TENUE, fontStyle: 'normal', fontSize: 8, halign: 'right' } },
+                 { content: 'Factor', styles: { fillColor: 255, textColor: TENUE, fontStyle: 'normal', fontSize: 8, halign: 'right' } },
+                 { content: 'Valor', styles: { fillColor: 255, textColor: TENUE, fontStyle: 'normal', fontSize: 8, halign: 'right' } }]
+            ],
+            showHead: 'firstPage', body: cuerpo, columnStyles: anchos
+        });
+        yy = doc.lastAutoTable.finalY + 10;
+    });
+
+    const p = rep.params;
+    const notas = [
+        'Los valores son adicionales al salario mensual. Valor hora = salario / 210 (jornada de 42 horas semanales).',
+        'Recargo nocturno (7:00 p.m. a 6:00 a.m.) 35 %. Dominical y festivo 90 %. Extra diurna 25 %. Extra nocturna 75 %.',
+        `Jornada de ${p.diario} h diarias y ${p.semanal} h semanales; almuerzo de ${p.almuerzo} min por día. Festivos considerados: ${p.festivos.length ? p.festivos.join(', ') : 'ninguno'}.`,
+        'Cálculo de referencia: valídalo con tu contador antes de pagar.'
+    ];
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(8.5); doc.setTextColor(...TENUE);
+    const lineas = notas.flatMap(t => doc.splitTextToSize(t, W - 2 * M));
+    y = yy + 12;
+    if (y + lineas.length * 12 > H - 50) { doc.addPage(); y = 50; }
+    doc.text(lineas, M, y, { lineHeightFactor: 1.4 });
+
+    const hoy = new Date().toLocaleDateString('es-CO'), pags = doc.getNumberOfPages();
+    for (let i = 1; i <= pags; i++) {
+        doc.setPage(i); doc.setFontSize(8); doc.setTextColor(...TENUE);
+        doc.text(`Generado el ${hoy}`, M, H - 24);
+        doc.text(`Página ${i} de ${pags}`, W - M, H - 24, { align: 'right' });
+    }
+    return doc;
+}
+
+function bajar(blob, nombre) {
+    const url = URL.createObjectURL(blob), a = document.createElement('a');
+    a.href = url; a.download = nombre; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 4000);
+}
+
+function mensajeDescarga(txt, error) { const m = $('msgDescarga'); m.textContent = txt; m.className = 'msg' + (error ? ' error' : ''); }
+
+async function descargar(tipo, btn) {
+    if (!datos || !ultimo) return;
+    const etiqueta = btn.querySelector('span'), original = etiqueta.textContent;
+    mensajeDescarga(''); btn.disabled = true; etiqueta.textContent = 'Preparando…';
+    try {
+        const rep = armarReporte();
+        if (tipo === 'excel') {
+            if (typeof ExcelJS === 'undefined') throw new Error('lib');
+            const buf = await crearExcel(ExcelJS, rep).xlsx.writeBuffer();
+            bajar(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), rep.archivo + '.xlsx');
+        } else {
+            const J = window.jspdf && window.jspdf.jsPDF;
+            if (!J) throw new Error('lib');
+            bajar(crearPDF(J, rep).output('blob'), rep.archivo + '.pdf');
+        }
+        mensajeDescarga(`${tipo === 'excel' ? 'Excel' : 'PDF'} descargado.`);
+    } catch (err) {
+        mensajeDescarga(err.message === 'lib'
+            ? 'No se pudo cargar el generador del archivo. Revisa tu conexión a internet y recarga la página.'
+            : 'No se pudo generar el archivo. Intenta de nuevo.', true);
+    } finally { btn.disabled = false; etiqueta.textContent = original; }
 }
 
 if (typeof document !== 'undefined') {
@@ -211,9 +438,11 @@ if (typeof document !== 'undefined') {
     drop.addEventListener('drop', e => { const f = e.dataTransfer.files[0]; if (f) cargar(f); });
     ['dragover', 'drop'].forEach(t => window.addEventListener(t, e => e.preventDefault())); // evita que el navegador abra el archivo
     ['almuerzo', 'diario', 'semanal', 'festivos'].forEach(id => $(id).addEventListener('input', () => datos && render()));
+    $('btnExcel').addEventListener('click', e => descargar('excel', e.currentTarget));
+    $('btnPdf').addEventListener('click', e => descargar('pdf', e.currentTarget));
     $('tablaEmpleados').addEventListener('input', e => {
         if (e.target.dataset.sal !== undefined) e.target.value = fmt(+e.target.value.replace(/\D/g, '') || 0);
         render();
     });
 }
-if (typeof module !== 'undefined') module.exports = { parsear, calcular, festivos };
+if (typeof module !== 'undefined') module.exports = { parsear, calcular, festivos, crearExcel, crearPDF };
