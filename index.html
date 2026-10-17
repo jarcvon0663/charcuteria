@@ -24,7 +24,7 @@
     <div class="hero-in">
         <div class="hero-texto">
             <h1>Calcula las horas extras de tu equipo desde el Excel</h1>
-            <p>Sube el archivo de horas de la quincena y ve cuánto debes pagar a cada empleado en horas extras y recargos, con las reglas laborales de Colombia vigentes en 2026.</p>
+            <p>Sube el archivo de horas de la quincena y ve cuánto debes pagar a cada empleado en horas extras y recargos, con las reglas laborales de Colombia que correspondan al mes del archivo.</p>
             <ol class="pasos">
                 <li>Sube el Excel de horas</li>
                 <li>Escribe el salario de cada empleado</li>
@@ -55,7 +55,20 @@
 
     <div class="app">
         <section id="config" class="panel" hidden>
-            <h2>Salarios</h2>
+            <h2>Período</h2>
+            <div class="periodo-campos">
+                <label class="campo"><span>Mes del archivo</span>
+                    <select id="periodoMes">
+                        <option value="1">Enero</option><option value="2">Febrero</option><option value="3">Marzo</option>
+                        <option value="4">Abril</option><option value="5">Mayo</option><option value="6">Junio</option>
+                        <option value="7">Julio</option><option value="8">Agosto</option><option value="9">Septiembre</option>
+                        <option value="10">Octubre</option><option value="11">Noviembre</option><option value="12">Diciembre</option>
+                    </select></label>
+                <label class="campo"><span>Año</span><input type="number" id="periodoAnio" min="2000" max="2100" inputmode="numeric"></label>
+            </div>
+            <p class="ayuda">Se detecta del título del Excel. Si las fechas no son las correctas, cámbialo aquí.</p>
+
+            <h2 class="sub">Salarios</h2>
             <p class="ayuda">Escribe el salario mensual de cada empleado. La app lo recuerda para la próxima quincena.</p>
             <div id="tablaEmpleados" class="lista-salarios"></div>
 
@@ -69,7 +82,7 @@
                 <label>Festivos del período (dd/mm/aaaa, uno por línea)
                     <textarea id="festivos" rows="2"></textarea>
                 </label>
-                <p class="ayuda">Valor hora = salario ÷ 210 (jornada de 42 h). Si un empleado no tiene salario definido se usa el salario mínimo 2026.</p>
+                <p class="ayuda" id="ayudaValorHora"></p>
             </details>
         </section>
 
@@ -92,13 +105,7 @@
             <div id="detalle"></div>
             <details class="como">
                 <summary>Cómo se calcula</summary>
-                <ul>
-                    <li>Los valores son <b>adicionales al salario mensual</b>.</li>
-                    <li>Nocturno: de 7:00 p.m. a 6:00 a.m. (+35 %). Dominical y festivo: +90 %.</li>
-                    <li>Extra: horas por encima de la jornada diaria y, en semanas completas (lunes a domingo), de la semanal. Extra diurna +25 %, nocturna +75 %.</li>
-                    <li>El almuerzo se descuenta una vez por día, del primer turno y hacia la mitad del mismo.</li>
-                    <li>Dom/fest compensado (el empleado tuvo un día de descanso): solo se paga el recargo. Si no, se paga la hora completa más el recargo.</li>
-                </ul>
+                <ul id="reglasTexto"></ul>
             </details>
         </section>
     </div>
